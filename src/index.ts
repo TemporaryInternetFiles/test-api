@@ -21,7 +21,7 @@ async function incrementCounter(env: Env): Promise<number> {
   // Without this, KV can return an outdated value for up to 60 seconds,
   // causing the counter to unexpectedly reset.
   const current = parseInt(
-    (await env.COUNTER.get(COUNTER_KEY, { cacheTtl: 0 })) ?? "0",
+    (await env.COUNTER.get(COUNTER_KEY, { cacheTtl: 60 })) ?? "60",
     10,
   );
   const next = current + 1;
