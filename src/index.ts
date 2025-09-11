@@ -62,7 +62,13 @@ export default {
       userAgents.add(userAgent);
     }
 
-    let counter = parseInt((await env.COUNTER.get(COUNTER_KEY)) ?? "0", 10);
+    // Use a cacheTtl of 0 to avoid stale reads from the edge cache.
+    // Without this, KV can return an outdated value for up to 60 seconds,
+    // causing the counter to unexpectedly reset.
+    let counter = parseInt(
+      (await env.COUNTER.get(COUNTER_KEY, { cacheTtl: 0 })) ?? "0",
+      10,
+    );
     counter++;
     await env.COUNTER.put(COUNTER_KEY, counter.toString());
 
