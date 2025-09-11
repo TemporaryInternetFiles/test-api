@@ -9,7 +9,12 @@ const trackingLog: Array<{
   trackingId: string | null;
 }> = [];
 const userAgents = new Set<string>();
-let counter = 0;
+
+interface Env {
+  COUNTER: KVNamespace;
+}
+
+const COUNTER_KEY = "counter";
 
 function getClientIp(request: Request): string {
   const headers = request.headers;
@@ -27,7 +32,7 @@ function getClientIp(request: Request): string {
 }
 
 export default {
-  async fetch(request): Promise<Response> {
+  async fetch(request: Request, env: Env): Promise<Response> {
     const requestHeaders: Record<string, string> = {};
     request.headers.forEach((value, key) => {
       requestHeaders[key] = value;
@@ -57,7 +62,9 @@ export default {
       userAgents.add(userAgent);
     }
 
+    let counter = parseInt((await env.COUNTER.get(COUNTER_KEY)) ?? "0", 10);
     counter++;
+    await env.COUNTER.put(COUNTER_KEY, counter.toString());
 
     const valuezero = 0;
     const valuerandompercent = Math.floor(Math.random() * 101);
@@ -127,5 +134,5 @@ export default {
 
     return new Response(JSON.stringify(data, null, 2), { headers });
   },
-} satisfies ExportedHandler;
+} satisfies ExportedHandler<Env>;
 
