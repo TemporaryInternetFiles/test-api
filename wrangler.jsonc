@@ -11,7 +11,10 @@
                 "enabled": true
         },
         "kv_namespaces": [
-                { "binding": "COUNTER", "id": "counter" }
+                {
+                        "binding": "COUNTER",
+                        "id": "106d20b4d18145e38fedda45591f6464"
+                }
         ]
         /**
          * Smart Placement

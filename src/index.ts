@@ -16,6 +16,19 @@ interface Env {
 
 const COUNTER_KEY = "counter";
 
+async function incrementCounter(env: Env): Promise<number> {
+  // Use a cacheTtl of 0 to avoid stale reads from the edge cache.
+  // Without this, KV can return an outdated value for up to 60 seconds,
+  // causing the counter to unexpectedly reset.
+  const current = parseInt(
+    (await env.COUNTER.get(COUNTER_KEY, { cacheTtl: 0 })) ?? "0",
+    10,
+  );
+  const next = current + 1;
+  await env.COUNTER.put(COUNTER_KEY, next.toString());
+  return next;
+}
+
 function getClientIp(request: Request): string {
   const headers = request.headers;
   const candidates = ["CF-Connecting-IP", "X-Forwarded-For", "X-Real-IP"];
@@ -62,28 +75,18 @@ export default {
       userAgents.add(userAgent);
     }
 
-    // Use a cacheTtl of 0 to avoid stale reads from the edge cache.
-    // Without this, KV can return an outdated value for up to 60 seconds,
-    // causing the counter to unexpectedly reset.
-    let counter = parseInt(
-      (await env.COUNTER.get(COUNTER_KEY, { cacheTtl: 0 })) ?? "0",
-      10,
-    );
-    counter++;
-    await env.COUNTER.put(COUNTER_KEY, counter.toString());
-
     const valuezero = 0;
     const valuerandompercent = Math.floor(Math.random() * 101);
-    const valueincrement = counter;
-    const valueboolswitch = counter % 2;
+    const valueincrement = await incrementCounter(env);
+    const valueboolswitch = valueincrement % 2;
     const valuestringtext =
-      counter % 5 === 0
+      valueincrement % 5 === 0
         ? "Warning OVERFLOW"
         : valuerandompercent % 2 === 0
         ? "Percentage is Even"
         : "Percentage is Odd";
     const valuestringtext2 =
-      counter % 5 === 0 ? null : valueboolswitch === 0 ? false : true;
+      valueincrement % 5 === 0 ? null : valueboolswitch === 0 ? false : true;
 
     const headers = new Headers();
     headers.set("Cache-Control", "no-cache, no-store, must-revalidate");
