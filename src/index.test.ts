@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import worker from './index';
+import worker, { resetCounterState } from './index';
 
 // Simple in-memory KV namespace mock
 function createEnv() {
@@ -20,6 +20,7 @@ describe('worker fetch', () => {
 
   beforeEach(() => {
     env = createEnv();
+    resetCounterState();
   });
 
   it('returns success with deterministic values and increments counter', async () => {
@@ -38,5 +39,23 @@ describe('worker fetch', () => {
     expect(data2.valueincrement).toBe(2);
 
     randomSpy.mockRestore();
+  });
+
+  it('throttles KV writes to at most one per second', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2024-01-01T00:00:00Z'));
+
+    const putSpy = vi.spyOn(env.COUNTER, 'put');
+
+    await worker.fetch(new Request('http://example.com'), env);
+    await worker.fetch(new Request('http://example.com'), env);
+    expect(putSpy).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(1000);
+    await worker.fetch(new Request('http://example.com'), env);
+    expect(putSpy).toHaveBeenCalledTimes(2);
+
+    putSpy.mockRestore();
+    vi.useRealTimers();
   });
 });
