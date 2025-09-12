@@ -16,18 +16,67 @@ interface Env {
 
 const COUNTER_KEY = "counter";
 const COUNTER_CACHE_TTL = 600; // Cloudflare requires >=60s; use 10 minutes to reduce KV reads
+const MIN_WRITE_INTERVAL_MS = 1000;
+const MAX_WRITES_PER_DAY = 1000;
+
+interface CounterState {
+  baseValue: number;
+  pending: number;
+  lastPersist: number;
+  writesToday: number;
+  currentDay: string;
+  initialized: boolean;
+}
+
+const counterState: CounterState = {
+  baseValue: 0,
+  pending: 0,
+  lastPersist: 0,
+  writesToday: 0,
+  currentDay: "",
+  initialized: false,
+};
+
+export function resetCounterState() {
+  counterState.baseValue = 0;
+  counterState.pending = 0;
+  counterState.lastPersist = 0;
+  counterState.writesToday = 0;
+  counterState.currentDay = "";
+  counterState.initialized = false;
+}
 
 async function incrementCounter(env: Env): Promise<number> {
-  // Use a cacheTtl to reduce KV API usage while keeping reads reasonably fresh.
-  // A higher TTL helps stay within the free tier limits at the cost of stale values.
-  const current = parseInt(
-    (await env.COUNTER.get(COUNTER_KEY, { cacheTtl: COUNTER_CACHE_TTL })) ??
-      "0",
-    10,
-  );
-  const next = current + 1;
-  await env.COUNTER.put(COUNTER_KEY, next.toString());
-  return next;
+  const now = Date.now();
+  const today = new Date(now).toISOString().slice(0, 10);
+
+  if (!counterState.initialized || counterState.currentDay !== today) {
+    const current = parseInt(
+      (await env.COUNTER.get(COUNTER_KEY, { cacheTtl: COUNTER_CACHE_TTL })) ??
+        "0",
+      10,
+    );
+    counterState.baseValue = current;
+    counterState.pending = 0;
+    counterState.writesToday = 0;
+    counterState.currentDay = today;
+    counterState.initialized = true;
+  }
+
+  counterState.pending += 1;
+
+  if (
+    now - counterState.lastPersist >= MIN_WRITE_INTERVAL_MS &&
+    counterState.writesToday < MAX_WRITES_PER_DAY
+  ) {
+    counterState.baseValue += counterState.pending;
+    await env.COUNTER.put(COUNTER_KEY, counterState.baseValue.toString());
+    counterState.pending = 0;
+    counterState.lastPersist = now;
+    counterState.writesToday += 1;
+  }
+
+  return counterState.baseValue + counterState.pending;
 }
 
 function getClientIp(request: Request): string {
