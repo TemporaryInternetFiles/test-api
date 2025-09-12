@@ -15,13 +15,14 @@ interface Env {
 }
 
 const COUNTER_KEY = "counter";
+const COUNTER_CACHE_TTL = 600; // Cloudflare requires >=60s; use 10 minutes to reduce KV reads
 
 async function incrementCounter(env: Env): Promise<number> {
-  // Use a cacheTtl of 0 to avoid stale reads from the edge cache.
-  // Without this, KV can return an outdated value for up to 60 seconds,
-  // causing the counter to unexpectedly reset.
+  // Use a cacheTtl to reduce KV API usage while keeping reads reasonably fresh.
+  // A higher TTL helps stay within the free tier limits at the cost of stale values.
   const current = parseInt(
-    (await env.COUNTER.get(COUNTER_KEY, { cacheTtl: 60 })) ?? "60",
+    (await env.COUNTER.get(COUNTER_KEY, { cacheTtl: COUNTER_CACHE_TTL })) ??
+      "0",
     10,
   );
   const next = current + 1;
