@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import worker, { resetCounterState } from './index';
+import worker, {
+  resetCounterState,
+  BATCH_SIZE,
+  MIN_WRITE_INTERVAL_MS,
+} from './index';
 
 // Simple in-memory KV namespace mock
 function createEnv() {
@@ -41,17 +45,24 @@ describe('worker fetch', () => {
     randomSpy.mockRestore();
   });
 
-  it('throttles KV writes to at most one per second', async () => {
+  it('batches KV writes by count and time', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2024-01-01T00:00:00Z'));
 
     const putSpy = vi.spyOn(env.COUNTER, 'put');
 
-    await worker.fetch(new Request('http://example.com'), env);
+    for (let i = 0; i < BATCH_SIZE - 1; i++) {
+      await worker.fetch(new Request('http://example.com'), env);
+    }
+    expect(putSpy).toHaveBeenCalledTimes(0);
+
     await worker.fetch(new Request('http://example.com'), env);
     expect(putSpy).toHaveBeenCalledTimes(1);
 
-    vi.advanceTimersByTime(1000);
+    await worker.fetch(new Request('http://example.com'), env);
+    expect(putSpy).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(MIN_WRITE_INTERVAL_MS);
     await worker.fetch(new Request('http://example.com'), env);
     expect(putSpy).toHaveBeenCalledTimes(2);
 
