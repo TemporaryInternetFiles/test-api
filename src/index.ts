@@ -15,9 +15,10 @@ interface Env {
 }
 
 const COUNTER_KEY = "counter";
-const COUNTER_CACHE_TTL = 600; // Cloudflare requires >=60s; use 10 minutes to reduce KV reads
-const MIN_WRITE_INTERVAL_MS = 1000;
-const MAX_WRITES_PER_DAY = 1000;
+export const COUNTER_CACHE_TTL = 3600; // 1 hour to reduce KV reads
+export const MIN_WRITE_INTERVAL_MS = 60000; // batch writes roughly once per minute
+export const BATCH_SIZE = 10;
+export const MAX_WRITES_PER_DAY = 1000;
 
 interface CounterState {
   baseValue: number;
@@ -51,6 +52,17 @@ async function incrementCounter(env: Env): Promise<number> {
   const today = new Date(now).toISOString().slice(0, 10);
 
   if (!counterState.initialized || counterState.currentDay !== today) {
+    if (
+      counterState.initialized &&
+      counterState.pending > 0 &&
+      counterState.writesToday < MAX_WRITES_PER_DAY
+    ) {
+      counterState.baseValue += counterState.pending;
+      await env.COUNTER.put(COUNTER_KEY, counterState.baseValue.toString());
+      counterState.pending = 0;
+      counterState.writesToday += 1;
+    }
+
     const current = parseInt(
       (await env.COUNTER.get(COUNTER_KEY, { cacheTtl: COUNTER_CACHE_TTL })) ??
         "0",
@@ -60,13 +72,15 @@ async function incrementCounter(env: Env): Promise<number> {
     counterState.pending = 0;
     counterState.writesToday = 0;
     counterState.currentDay = today;
+    counterState.lastPersist = now;
     counterState.initialized = true;
   }
 
   counterState.pending += 1;
 
   if (
-    now - counterState.lastPersist >= MIN_WRITE_INTERVAL_MS &&
+    (now - counterState.lastPersist >= MIN_WRITE_INTERVAL_MS ||
+      counterState.pending >= BATCH_SIZE) &&
     counterState.writesToday < MAX_WRITES_PER_DAY
   ) {
     counterState.baseValue += counterState.pending;
