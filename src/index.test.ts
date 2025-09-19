@@ -1,9 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import worker, {
-  resetCounterState,
-  BATCH_SIZE,
-  MIN_WRITE_INTERVAL_MS,
-} from './index';
+import worker, { resetCounterState, INCREMENT_INTERVAL_MS } from './index';
 
 // Simple in-memory KV namespace mock
 function createEnv() {
@@ -27,7 +23,9 @@ describe('worker fetch', () => {
     resetCounterState();
   });
 
-  it('returns success with deterministic values and increments counter', async () => {
+  it('returns success with deterministic values and increments on schedule', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2024-01-01T00:00:00Z'));
     const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.5);
 
     const res1 = await worker.fetch(new Request('http://example.com'), env);
@@ -40,30 +38,39 @@ describe('worker fetch', () => {
 
     const res2 = await worker.fetch(new Request('http://example.com'), env);
     const data2 = await res2.json();
-    expect(data2.valueincrement).toBe(2);
+    expect(data2.valueincrement).toBe(1);
+
+    vi.advanceTimersByTime(INCREMENT_INTERVAL_MS);
+    const res3 = await worker.fetch(new Request('http://example.com'), env);
+    const data3 = await res3.json();
+    expect(data3.valueincrement).toBe(2);
 
     randomSpy.mockRestore();
+    vi.useRealTimers();
   });
 
-  it('batches KV writes by count and time', async () => {
+  it('limits KV writes to the configured increment interval', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2024-01-01T00:00:00Z'));
 
     const putSpy = vi.spyOn(env.COUNTER, 'put');
 
-    for (let i = 0; i < BATCH_SIZE - 1; i++) {
-      await worker.fetch(new Request('http://example.com'), env);
-    }
-    expect(putSpy).toHaveBeenCalledTimes(0);
-
-    await worker.fetch(new Request('http://example.com'), env);
+    const res1 = await worker.fetch(new Request('http://example.com'), env);
+    await res1.json();
     expect(putSpy).toHaveBeenCalledTimes(1);
 
-    await worker.fetch(new Request('http://example.com'), env);
+    const res2 = await worker.fetch(new Request('http://example.com'), env);
+    await res2.json();
     expect(putSpy).toHaveBeenCalledTimes(1);
 
-    vi.advanceTimersByTime(MIN_WRITE_INTERVAL_MS);
-    await worker.fetch(new Request('http://example.com'), env);
+    vi.advanceTimersByTime(INCREMENT_INTERVAL_MS * 5);
+    const res3 = await worker.fetch(new Request('http://example.com'), env);
+    const data3 = await res3.json();
+    expect(data3.valueincrement).toBe(6);
+    expect(putSpy).toHaveBeenCalledTimes(2);
+
+    const res4 = await worker.fetch(new Request('http://example.com'), env);
+    await res4.json();
     expect(putSpy).toHaveBeenCalledTimes(2);
 
     putSpy.mockRestore();
