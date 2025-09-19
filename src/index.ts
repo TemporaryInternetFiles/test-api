@@ -15,82 +15,108 @@ interface Env {
 }
 
 const COUNTER_KEY = "counter";
-export const COUNTER_CACHE_TTL = 3600; // 1 hour to reduce KV reads
-export const MIN_WRITE_INTERVAL_MS = 60000; // batch writes roughly once per minute
-export const BATCH_SIZE = 10;
-export const MAX_WRITES_PER_DAY = 1000;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+export const INCREMENTS_PER_DAY = 200;
+export const INCREMENT_INTERVAL_MS = Math.floor(MS_PER_DAY / INCREMENTS_PER_DAY);
 
-interface CounterState {
-  baseValue: number;
-  pending: number;
-  lastPersist: number;
-  writesToday: number;
-  currentDay: string;
+interface PersistedCounterState {
+  total: number;
+  lastIncrementTimestamp: number;
+}
+
+interface CounterState extends PersistedCounterState {
   initialized: boolean;
 }
 
 const counterState: CounterState = {
-  baseValue: 0,
-  pending: 0,
-  lastPersist: 0,
-  writesToday: 0,
-  currentDay: "",
+  total: 0,
+  lastIncrementTimestamp: 0,
   initialized: false,
 };
 
 export function resetCounterState() {
-  counterState.baseValue = 0;
-  counterState.pending = 0;
-  counterState.lastPersist = 0;
-  counterState.writesToday = 0;
-  counterState.currentDay = "";
+  counterState.total = 0;
+  counterState.lastIncrementTimestamp = 0;
   counterState.initialized = false;
 }
 
-async function incrementCounter(env: Env): Promise<number> {
-  const now = Date.now();
-  const today = new Date(now).toISOString().slice(0, 10);
-
-  if (!counterState.initialized || counterState.currentDay !== today) {
+function parsePersistedState(raw: string, now: number): PersistedCounterState {
+  try {
+    const parsed = JSON.parse(raw) as Partial<PersistedCounterState>;
     if (
-      counterState.initialized &&
-      counterState.pending > 0 &&
-      counterState.writesToday < MAX_WRITES_PER_DAY
+      typeof parsed?.total === "number" &&
+      typeof parsed?.lastIncrementTimestamp === "number"
     ) {
-      counterState.baseValue += counterState.pending;
-      await env.COUNTER.put(COUNTER_KEY, counterState.baseValue.toString());
-      counterState.pending = 0;
-      counterState.writesToday += 1;
+      const clampedTimestamp = Math.min(parsed.lastIncrementTimestamp, now);
+      return {
+        total: parsed.total,
+        lastIncrementTimestamp: clampedTimestamp,
+      };
     }
+  } catch {
+    // Ignore JSON parse errors and fall back to numeric parsing
+  }
 
-    const current = parseInt(
-      (await env.COUNTER.get(COUNTER_KEY, { cacheTtl: COUNTER_CACHE_TTL })) ??
-        "0",
-      10,
+  const numericValue = Number.parseInt(raw, 10);
+  if (!Number.isNaN(numericValue)) {
+    return {
+      total: numericValue,
+      lastIncrementTimestamp: now - INCREMENT_INTERVAL_MS,
+    };
+  }
+
+  return {
+    total: 0,
+    lastIncrementTimestamp: now - INCREMENT_INTERVAL_MS,
+  };
+}
+
+async function ensureCounterState(env: Env): Promise<void> {
+  if (counterState.initialized) {
+    return;
+  }
+
+  const now = Date.now();
+  const raw = await env.COUNTER.get(COUNTER_KEY);
+  if (typeof raw === "string") {
+    const persisted = parsePersistedState(raw, now);
+    counterState.total = persisted.total;
+    counterState.lastIncrementTimestamp = persisted.lastIncrementTimestamp;
+  } else {
+    counterState.total = 0;
+    counterState.lastIncrementTimestamp = now - INCREMENT_INTERVAL_MS;
+  }
+
+  counterState.initialized = true;
+}
+
+async function incrementCounter(env: Env): Promise<number> {
+  await ensureCounterState(env);
+
+  const now = Date.now();
+  if (counterState.lastIncrementTimestamp === 0) {
+    counterState.lastIncrementTimestamp = now - INCREMENT_INTERVAL_MS;
+  }
+
+  let incrementsDue = 0;
+  if (now > counterState.lastIncrementTimestamp) {
+    incrementsDue = Math.floor(
+      (now - counterState.lastIncrementTimestamp) / INCREMENT_INTERVAL_MS,
     );
-    counterState.baseValue = current;
-    counterState.pending = 0;
-    counterState.writesToday = 0;
-    counterState.currentDay = today;
-    counterState.lastPersist = now;
-    counterState.initialized = true;
   }
 
-  counterState.pending += 1;
+  if (incrementsDue > 0) {
+    counterState.total += incrementsDue;
+    counterState.lastIncrementTimestamp += incrementsDue * INCREMENT_INTERVAL_MS;
 
-  if (
-    (now - counterState.lastPersist >= MIN_WRITE_INTERVAL_MS ||
-      counterState.pending >= BATCH_SIZE) &&
-    counterState.writesToday < MAX_WRITES_PER_DAY
-  ) {
-    counterState.baseValue += counterState.pending;
-    await env.COUNTER.put(COUNTER_KEY, counterState.baseValue.toString());
-    counterState.pending = 0;
-    counterState.lastPersist = now;
-    counterState.writesToday += 1;
+    const payload: PersistedCounterState = {
+      total: counterState.total,
+      lastIncrementTimestamp: counterState.lastIncrementTimestamp,
+    };
+    await env.COUNTER.put(COUNTER_KEY, JSON.stringify(payload));
   }
 
-  return counterState.baseValue + counterState.pending;
+  return counterState.total;
 }
 
 function getClientIp(request: Request): string {
