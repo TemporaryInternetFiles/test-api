@@ -16,8 +16,8 @@ interface Env {
 
 const COUNTER_KEY = "counter";
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
-export const INCREMENTS_PER_DAY = 200;
-export const INCREMENT_INTERVAL_MS = Math.floor(MS_PER_DAY / INCREMENTS_PER_DAY);
+export const INCREMENTS_PER_DAY = 400;
+export const INCREMENT_INTERVAL_MS = Math.ceil(MS_PER_DAY / INCREMENTS_PER_DAY);
 
 interface PersistedCounterState {
   total: number;

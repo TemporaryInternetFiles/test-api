@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import worker, { resetCounterState, INCREMENT_INTERVAL_MS } from './index';
+import worker, {
+  resetCounterState,
+  INCREMENT_INTERVAL_MS,
+  INCREMENTS_PER_DAY,
+} from './index';
 
 // Simple in-memory KV namespace mock
 function createEnv() {
@@ -72,6 +76,27 @@ describe('worker fetch', () => {
     const res4 = await worker.fetch(new Request('http://example.com'), env);
     await res4.json();
     expect(putSpy).toHaveBeenCalledTimes(2);
+
+    putSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it('never schedules more than the configured daily writes', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2024-01-01T00:00:00Z'));
+
+    const putSpy = vi.spyOn(env.COUNTER, 'put');
+
+    // Issue requests twice as often as the increment interval so that
+    // multiple requests fall into the same window.
+    const iterations = INCREMENTS_PER_DAY * 2;
+    for (let i = 0; i < iterations; i += 1) {
+      const res = await worker.fetch(new Request('http://example.com'), env);
+      await res.json();
+      vi.advanceTimersByTime(Math.floor(INCREMENT_INTERVAL_MS / 2));
+    }
+
+    expect(putSpy.mock.calls.length).toBeLessThanOrEqual(INCREMENTS_PER_DAY);
 
     putSpy.mockRestore();
     vi.useRealTimers();
