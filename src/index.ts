@@ -24,20 +24,29 @@ interface PersistedCounterState {
   lastIncrementTimestamp: number;
 }
 
+export const MAX_PENDING_INCREMENTS_BEFORE_PERSIST = 50;
+export const MAX_PERSIST_INTERVAL_MS = 2 * 60 * 60 * 1000;
+
 interface CounterState extends PersistedCounterState {
   initialized: boolean;
+  pendingPersistIncrements: number;
+  lastPersistTime: number;
 }
 
 const counterState: CounterState = {
   total: 0,
   lastIncrementTimestamp: 0,
   initialized: false,
+  pendingPersistIncrements: 0,
+  lastPersistTime: 0,
 };
 
 export function resetCounterState() {
   counterState.total = 0;
   counterState.lastIncrementTimestamp = 0;
   counterState.initialized = false;
+  counterState.pendingPersistIncrements = 0;
+  counterState.lastPersistTime = 0;
 }
 
 function parsePersistedState(raw: string, now: number): PersistedCounterState {
@@ -85,9 +94,16 @@ async function ensureCounterState(env: Env): Promise<void> {
   } else {
     counterState.total = 0;
     counterState.lastIncrementTimestamp = now - INCREMENT_INTERVAL_MS;
+    const payload: PersistedCounterState = {
+      total: counterState.total,
+      lastIncrementTimestamp: counterState.lastIncrementTimestamp,
+    };
+    await env.COUNTER.put(COUNTER_KEY, JSON.stringify(payload));
   }
 
   counterState.initialized = true;
+  counterState.pendingPersistIncrements = 0;
+  counterState.lastPersistTime = now;
 }
 
 async function incrementCounter(env: Env): Promise<number> {
@@ -108,12 +124,26 @@ async function incrementCounter(env: Env): Promise<number> {
   if (incrementsDue > 0) {
     counterState.total += incrementsDue;
     counterState.lastIncrementTimestamp += incrementsDue * INCREMENT_INTERVAL_MS;
+    counterState.pendingPersistIncrements += incrementsDue;
+  }
 
+  const nowAfterIncrement = Date.now();
+  const persistBecausePending =
+    counterState.pendingPersistIncrements >= MAX_PENDING_INCREMENTS_BEFORE_PERSIST;
+  const persistBecauseTime =
+    counterState.pendingPersistIncrements > 0 &&
+    nowAfterIncrement - counterState.lastPersistTime >= MAX_PERSIST_INTERVAL_MS;
+
+  if (persistBecausePending || persistBecauseTime) {
     const payload: PersistedCounterState = {
       total: counterState.total,
       lastIncrementTimestamp: counterState.lastIncrementTimestamp,
     };
     await env.COUNTER.put(COUNTER_KEY, JSON.stringify(payload));
+    counterState.pendingPersistIncrements = 0;
+    counterState.lastPersistTime = nowAfterIncrement;
+  } else if (nowAfterIncrement - counterState.lastPersistTime >= MAX_PERSIST_INTERVAL_MS) {
+    counterState.lastPersistTime = nowAfterIncrement;
   }
 
   return counterState.total;
