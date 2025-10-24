@@ -3,6 +3,8 @@ import worker, {
   resetCounterState,
   INCREMENT_INTERVAL_MS,
   INCREMENTS_PER_DAY,
+  MAX_PENDING_INCREMENTS_BEFORE_PERSIST,
+  MAX_PERSIST_INTERVAL_MS,
 } from './index';
 
 // Simple in-memory KV namespace mock
@@ -53,7 +55,7 @@ describe('worker fetch', () => {
     vi.useRealTimers();
   });
 
-  it('limits KV writes to the configured increment interval', async () => {
+  it('batches KV writes until persist interval elapses', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2024-01-01T00:00:00Z'));
 
@@ -63,32 +65,57 @@ describe('worker fetch', () => {
     await res1.json();
     expect(putSpy).toHaveBeenCalledTimes(1);
 
-    const res2 = await worker.fetch(new Request('http://example.com'), env);
-    await res2.json();
+    const incrementsBeforeTimeFlush = Math.floor(
+      MAX_PERSIST_INTERVAL_MS / INCREMENT_INTERVAL_MS,
+    );
+
+    for (let i = 0; i < incrementsBeforeTimeFlush; i += 1) {
+      vi.advanceTimersByTime(INCREMENT_INTERVAL_MS);
+      const res = await worker.fetch(new Request('http://example.com'), env);
+      await res.json();
+    }
+
     expect(putSpy).toHaveBeenCalledTimes(1);
 
-    vi.advanceTimersByTime(INCREMENT_INTERVAL_MS * 5);
-    const res3 = await worker.fetch(new Request('http://example.com'), env);
-    const data3 = await res3.json();
-    expect(data3.valueincrement).toBe(6);
-    expect(putSpy).toHaveBeenCalledTimes(2);
-
-    const res4 = await worker.fetch(new Request('http://example.com'), env);
-    await res4.json();
+    vi.advanceTimersByTime(INCREMENT_INTERVAL_MS);
+    const resTrigger = await worker.fetch(new Request('http://example.com'), env);
+    await resTrigger.json();
     expect(putSpy).toHaveBeenCalledTimes(2);
 
     putSpy.mockRestore();
     vi.useRealTimers();
   });
 
-  it('never schedules more than the configured daily writes', async () => {
+  it('persists when the pending increment threshold is exceeded', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2024-01-01T00:00:00Z'));
 
     const putSpy = vi.spyOn(env.COUNTER, 'put');
 
-    // Issue requests twice as often as the increment interval so that
-    // multiple requests fall into the same window.
+    const res1 = await worker.fetch(new Request('http://example.com'), env);
+    await res1.json();
+    expect(putSpy).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(
+      INCREMENT_INTERVAL_MS * (MAX_PENDING_INCREMENTS_BEFORE_PERSIST + 5),
+    );
+    const res2 = await worker.fetch(new Request('http://example.com'), env);
+    await res2.json();
+    expect(putSpy).toHaveBeenCalledTimes(2);
+
+    putSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it('caps total KV writes under the configured limits', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2024-01-01T00:00:00Z'));
+
+    const putSpy = vi.spyOn(env.COUNTER, 'put');
+
+    const res1 = await worker.fetch(new Request('http://example.com'), env);
+    await res1.json();
+
     const iterations = INCREMENTS_PER_DAY * 2;
     for (let i = 0; i < iterations; i += 1) {
       const res = await worker.fetch(new Request('http://example.com'), env);
@@ -96,7 +123,14 @@ describe('worker fetch', () => {
       vi.advanceTimersByTime(Math.floor(INCREMENT_INTERVAL_MS / 2));
     }
 
-    expect(putSpy.mock.calls.length).toBeLessThanOrEqual(INCREMENTS_PER_DAY);
+    const totalDurationMs = INCREMENT_INTERVAL_MS * INCREMENTS_PER_DAY;
+    const maxWritesFromTime = Math.ceil(totalDurationMs / MAX_PERSIST_INTERVAL_MS);
+    const maxWritesFromPending = Math.ceil(
+      INCREMENTS_PER_DAY / MAX_PENDING_INCREMENTS_BEFORE_PERSIST,
+    );
+    const expectedUpperBound = 1 + maxWritesFromTime + maxWritesFromPending;
+
+    expect(putSpy.mock.calls.length).toBeLessThanOrEqual(expectedUpperBound);
 
     putSpy.mockRestore();
     vi.useRealTimers();
