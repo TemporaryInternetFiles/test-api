@@ -256,6 +256,12 @@ export default {
         { jmeno: "jarda", vek: 45 },
         { jmeno: "honza", vek: 40 },
       ],
+      complexarray: [
+        { firstKey: 20, string: "testik" },
+        { testKey: valuestringtext, testStringStatic: "static" },
+        [1, 2, 3, 6, 5, 7, 9, [5, 5, 6, 8, 9, 7, 5, 23]],
+        { firstKey: [1, 3, 4, 6, 7, 8, 323, 45], testKey: 66, 0: [1, 2, 3, 6, 5, 7, 9] },
+      ],
       longvalue:
         "Lorem ipsum dolor sit amet, consectetur adipisici elit, sed eiusmod tempor incidunt ut labore et dolore magna aliqua...",
       example: { key1: "value1", key2: "value2" },
@@ -264,4 +270,3 @@ export default {
     return new Response(JSON.stringify(data, null, 2), { headers });
   },
 } satisfies ExportedHandler<Env>;
-
